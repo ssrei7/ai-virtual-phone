@@ -187,18 +187,17 @@ async function synthesizeMosi(text: string, config: VoiceApiConfig): Promise<Blo
     if (!config.defaultVoice?.trim()) throw new Error("MOSI Voice ID 未配置");
 
     const baseUrl = (config.baseUrl || "https://api.mosi.cn/v1").replace(/\/$/, "");
-    const response = await fetchWithTimeout(`${baseUrl}/audio/speech`, {
+    // api.mosi.cn 当前拒绝浏览器的 CORS 预检 OPTIONS（403）。改走本站
+    // Next.js 代理，避免 Safari/Chrome 在真正 POST 前就被浏览器拦截。
+    const response = await fetchWithTimeout("/api/voice/mosi", {
         method: "POST",
-        headers: {
-            Authorization: `Bearer ${config.apiKey}`,
-            "Content-Type": "application/json",
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+            apiKey: config.apiKey,
+            baseUrl,
             model: config.model || "moss-tts-1.5-flash",
             input: text,
-            voice_id: config.defaultVoice,
-            response_format: "mp3",
-            delivery_method: "audio",
+            voiceId: config.defaultVoice,
         }),
     });
 
