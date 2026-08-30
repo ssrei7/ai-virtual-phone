@@ -5,7 +5,7 @@ import { Plus, Play, Pause, AlertCircle, RefreshCw, FileEdit, Trash2, X, Check, 
 import { SettingsContext } from "../phone-settings-app";
 import type { VoiceApiConfig } from "@/lib/settings-types";
 import { loadVoiceConfigs, saveVoiceConfigs } from "@/lib/settings-storage";
-import { synthesizeSpeech } from "@/lib/tts-service";
+import { synthesizeSpeech, playAudioBlob, unlockAudioPlayback } from "@/lib/tts-service";
 import { ConfirmDialog } from "@/components/ui/modal";
 import { Toggle, Input } from "@/components/ui/form";
 import { Alert } from "@/components/ui/feedback";
@@ -260,7 +260,7 @@ export function VoiceSettings() {
     const [manualModelIds, setManualModelIds] = useState<Record<string, boolean>>({});
     const [manualVoiceIds, setManualVoiceIds] = useState<Record<string, boolean>>({});
     const [isLoaded, setIsLoaded] = useState(false);
-    const audioRef = useRef<HTMLAudioElement | null>(null);
+    const audioRef = useRef<{ pause: () => void } | null>(null);
 
     // Fetching states for Voices
     const [isFetching, setIsFetching] = useState<Record<string, boolean>>({});
@@ -571,6 +571,9 @@ export function VoiceSettings() {
             audioRef.current = null;
         }
 
+        // 必须在 iPhone Safari 的点击手势中解锁音频；否则即使 TTS 请求成功，
+        // WebKit 也会拒绝后续异步请求完成后的播放。
+        unlockAudioPlayback();
         setPlayingVoiceId(config.id);
 
         try {
@@ -582,21 +585,12 @@ export function VoiceSettings() {
                 config,
             );
             if (!blob) throw new Error("当前语音配置未返回真实音频");
-            const url = URL.createObjectURL(blob);
-
-            const audio = new Audio(url);
-            audioRef.current = audio;
-            audio.onended = () => {
-                setPlayingVoiceId(null);
-                audioRef.current = null;
-                URL.revokeObjectURL(url);
-            };
-            audio.onerror = () => {
-                setPlayingVoiceId(null);
-                audioRef.current = null;
-                URL.revokeObjectURL(url);
-            };
-            await audio.play();
+            // 复用统一播放管线：iOS Safari 通过 Web Audio 播放，避免异步
+            // fetch 完成后直接调用 new Audio().play() 被 WebKit 拦截。
+            const { promise, abort } = playAudioBlob(blob);
+            audioRef.current = { pause: abort };
+            await promise;
+            audioRef.current = null;
         } catch (e: unknown) {
             const msg = e instanceof Error ? e.message : String(e);
             alert(`语音测试失败: ${msg}`);
