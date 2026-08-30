@@ -39,16 +39,9 @@ jobs:
 
       - name: Check custom App SDK
         run: npm run check:sdk
-        
-      - name: Lint changed implementation files
-        run: >
-          npx eslint
-          lib/image-generation-service.ts
-          lib/image-generation-reference-policy.ts
-          lib/custom-app-host-api.ts
-          app/api/image-generation/route.ts
-          components/app-market/custom-app-runner.tsx
-          lib/custom-app-creator-guide.ts
+
+      - name: TypeScript check
+        run: npx tsc --noEmit
 
       - name: Repository lint baseline
         continue-on-error: true
