@@ -25,6 +25,7 @@ export function resolveVoiceConfig(characterId: string, appId?: ContentAppId): V
  * Supported providers:
  * - Minimax: REST API → hex-encoded mp3
  * - OpenAI: REST API → binary audio blob
+ * - MOSI: OpenAI-compatible endpoint → audio binary blob (voice_id field)
  */
 export async function synthesizeSpeech(
     text: string,
@@ -41,6 +42,10 @@ export async function synthesizeSpeech(
 
     if (provider === "OpenAI") {
         return synthesizeOpenAI(text, voiceConfig);
+    }
+
+    if (provider === "MOSI") {
+        return synthesizeMosi(text, voiceConfig);
     }
 
     return null;
@@ -172,6 +177,42 @@ async function synthesizeOpenAI(text: string, config: VoiceApiConfig): Promise<B
 
     const blob = await response.blob();
     return new Blob([await blob.arrayBuffer()], { type: "audio/mpeg" });
+}
+
+// ── MOSI TTS ─────────────────────────────────────────
+// MOSI uses the same /v1/audio/speech path as OpenAI, but requires voice_id
+// instead of voice and supports binary audio delivery directly.
+async function synthesizeMosi(text: string, config: VoiceApiConfig): Promise<Blob | null> {
+    if (!config.apiKey) throw new Error("MOSI API Key 未配置");
+    if (!config.defaultVoice?.trim()) throw new Error("MOSI Voice ID 未配置");
+
+    const baseUrl = (config.baseUrl || "https://api.mosi.cn/v1").replace(/\/$/, "");
+    const response = await fetchWithTimeout(`${baseUrl}/audio/speech`, {
+        method: "POST",
+        headers: {
+            Authorization: `Bearer ${config.apiKey}`,
+            "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+            model: config.model || "moss-tts-1.5-flash",
+            input: text,
+            voice_id: config.defaultVoice,
+            response_format: "mp3",
+            delivery_method: "audio",
+        }),
+    });
+
+    if (!response.ok) {
+        const contentType = response.headers.get("content-type") || "";
+        const detail = contentType.includes("application/json")
+            ? JSON.stringify(await response.json().catch(() => ({})))
+            : await response.text().catch(() => "");
+        throw new Error(`MOSI TTS 请求失败 (${response.status}): ${detail.slice(0, 500)}`);
+    }
+
+    const blob = await response.blob();
+    const mimeType = response.headers.get("content-type") || "audio/mpeg";
+    return new Blob([await blob.arrayBuffer()], { type: mimeType.split(";")[0] || "audio/mpeg" });
 }
 
 // ── iOS audio playback that coexists with speech recognition ──────────

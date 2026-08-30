@@ -10,13 +10,14 @@ import { ConfirmDialog } from "@/components/ui/modal";
 import { Toggle, Input } from "@/components/ui/form";
 import { Alert } from "@/components/ui/feedback";
 
-const SUPPORTED_VOICE_PROVIDERS = new Set(["Minimax", "OpenAI"]);
+const SUPPORTED_VOICE_PROVIDERS = new Set(["Minimax", "OpenAI", "MOSI"]);
 const MINIMAX_BASE_URL_OPTIONS = [
     { id: "cn", label: "国内版", baseUrl: "https://api.minimaxi.com/v1" },
     { id: "global", label: "海外版", baseUrl: "https://api.minimax.io/v1" },
 ];
 const DEFAULT_MINIMAX_BASE_URL = MINIMAX_BASE_URL_OPTIONS[0].baseUrl;
 const GLOBAL_MINIMAX_BASE_URL = MINIMAX_BASE_URL_OPTIONS[1].baseUrl;
+const DEFAULT_MOSI_BASE_URL = "https://api.mosi.cn/v1";
 const MINIMAX_SPEED_MIN = 0.5;
 const MINIMAX_SPEED_MAX = 2.0;
 const MINIMAX_SPEED_STEP = 0.1;
@@ -28,6 +29,7 @@ const MINIMAX_PITCH_STEP = 1;
 const DEFAULT_SPEECH_PITCH = 0;
 const VOICE_PROVIDER_OPTIONS = [
     { value: "OpenAI", label: "OpenAI TTS" },
+    { value: "MOSI", label: "MOSI 语音" },
     { value: "MinimaxCN", label: "Minimax 语音国内版" },
     { value: "MinimaxGlobal", label: "Minimax 语音海外版" },
 ];
@@ -46,6 +48,11 @@ const DEFAULT_VOICE_CONFIGS: VoiceApiConfig[] = [
         enableSTT: true,
         enableTTS: true,
     }
+];
+
+const DEFAULT_MOSI_MODELS = [
+    { id: "moss-tts-1.5-flash", name: "moss-tts-1.5-flash" },
+    { id: "moss-tts-1.0-pro", name: "moss-tts-1.0-pro" },
 ];
 
 const DEFAULT_MINIMAX_MODELS = [
@@ -181,8 +188,12 @@ function uniqueOptions(options: VoiceOption[]): VoiceOption[] {
     });
 }
 
+const DEFAULT_MOSI_VOICES: VoiceOption[] = [];
+
 function defaultVoiceOptions(provider: string): VoiceOption[] {
-    return provider === "OpenAI" ? DEFAULT_OPENAI_VOICES : DEFAULT_MINIMAX_VOICES;
+    if (provider === "OpenAI") return DEFAULT_OPENAI_VOICES;
+    if (provider === "MOSI") return DEFAULT_MOSI_VOICES;
+    return DEFAULT_MINIMAX_VOICES;
 }
 
 function voiceOptionsForConfig(config: VoiceApiConfig, fetchedVoices: Record<string, VoiceOption[]>): VoiceOption[] {
@@ -197,6 +208,13 @@ function normalizeVoiceConfigs(configs: VoiceApiConfig[]): VoiceApiConfig[] {
     return configs
         .filter(config => SUPPORTED_VOICE_PROVIDERS.has(config.provider))
         .map(config => {
+            if (config.provider === "MOSI") {
+                return {
+                    ...config,
+                    baseUrl: config.baseUrl || DEFAULT_MOSI_BASE_URL,
+                    model: config.model || "moss-tts-1.5-flash",
+                };
+            }
             if (config.provider !== "Minimax") return config;
             const baseUrl = MINIMAX_BASE_URL_OPTIONS.some(option => option.baseUrl === config.baseUrl)
                 ? config.baseUrl
@@ -222,6 +240,7 @@ function makeCloneVoiceId(config: VoiceApiConfig): string {
 
 function providerSelectValue(config: VoiceApiConfig): string {
     if (config.provider === "OpenAI") return "OpenAI";
+    if (config.provider === "MOSI") return "MOSI";
     return config.baseUrl === GLOBAL_MINIMAX_BASE_URL ? "MinimaxGlobal" : "MinimaxCN";
 }
 
@@ -313,6 +332,17 @@ export function VoiceSettings() {
             });
             setManualModelIds(prev => ({ ...prev, [id]: true }));
             setManualVoiceIds(prev => ({ ...prev, [id]: false }));
+            return;
+        }
+        if (providerOption === "MOSI") {
+            updateConfig(id, {
+                provider: "MOSI",
+                baseUrl: DEFAULT_MOSI_BASE_URL,
+                model: "moss-tts-1.5-flash",
+                defaultVoice: current?.provider === "MOSI" ? (current.defaultVoice || "") : "",
+            });
+            setManualModelIds(prev => ({ ...prev, [id]: false }));
+            setManualVoiceIds(prev => ({ ...prev, [id]: true }));
             return;
         }
         const wasMinimax = current?.provider === "Minimax";
@@ -499,6 +529,9 @@ export function VoiceSettings() {
 
             } else if (config.provider === "OpenAI") {
                 setFetchedVoices(prev => ({ ...prev, [config.id]: DEFAULT_OPENAI_VOICES }));
+            } else if (config.provider === "MOSI") {
+                setFetchedVoices(prev => ({ ...prev, [config.id]: [] }));
+                setFetchError(prev => ({ ...prev, [config.id]: "MOSI 音色列表接口尚未接入，请从 Mossland 音色库复制 Voice ID 后手动填写" }));
             } else {
                 throw new Error("该服务商暂不支持拉取模型列表");
             }
@@ -740,6 +773,61 @@ export function VoiceSettings() {
                                             </>
                                         )}
 
+                                        {config.provider === "MOSI" && (
+                                            <>
+                                                <div className="flex flex-col gap-1">
+                                                    <label className="menu-desc ml-1">接口地址 (Base URL)</label>
+                                                    <Input
+                                                        type="text"
+                                                        value={config.baseUrl || ""}
+                                                        onChange={(e) => updateConfig(config.id, { baseUrl: e.target.value })}
+                                                        placeholder="https://api.mosi.cn/v1"
+                                                    />
+                                                </div>
+                                                <div className="flex flex-col gap-1">
+                                                    <label className="menu-desc ml-1">语音模型 (TTS Model)</label>
+                                                    {manualModelIds[config.id] ? (
+                                                        <div className="flex gap-2">
+                                                            <Input
+                                                                type="text"
+                                                                value={config.model || ""}
+                                                                onChange={(e) => updateConfig(config.id, { model: e.target.value })}
+                                                                placeholder="moss-tts-1.5-flash"
+                                                                className="flex-1"
+                                                            />
+                                                            <button
+                                                                type="button"
+                                                                onClick={() => setManualModelIds(prev => ({ ...prev, [config.id]: false }))}
+                                                                className="ui-icon-btn"
+                                                                aria-label="返回模型下拉选择"
+                                                                title="返回模型下拉选择"
+                                                            >
+                                                                <List size={20} />
+                                                            </button>
+                                                        </div>
+                                                    ) : (
+                                                        <select
+                                                            value={DEFAULT_MOSI_MODELS.some(m => m.id === config.model) ? config.model : "__manual__"}
+                                                            onChange={(e) => {
+                                                                if (e.target.value === "__manual__") {
+                                                                    setManualModelIds(prev => ({ ...prev, [config.id]: true }));
+                                                                    return;
+                                                                }
+                                                                updateConfig(config.id, { model: e.target.value });
+                                                            }}
+                                                            className="ui-select"
+                                                        >
+                                                            {DEFAULT_MOSI_MODELS.map(model => (
+                                                                <option key={model.id} value={model.id}>{model.name}</option>
+                                                            ))}
+                                                            <option value="__manual__">手动输入...</option>
+                                                        </select>
+                                                    )}
+                                                    <span className="menu-desc ml-1">MOSI 当前支持 moss-tts-1.5-flash 和 moss-tts-1.0-pro。</span>
+                                                </div>
+                                            </>
+                                        )}
+
                                         {config.provider === "Minimax" && (
                                             <>
                                                 <div className="flex flex-col gap-1">
@@ -845,24 +933,26 @@ export function VoiceSettings() {
                                             <label className="menu-desc ml-1">默认音色 (Default Voice) 或 自定义 Voice ID</label>
                                             <div className="flex flex-col gap-2">
                                                 <div className="flex gap-2">
-                                                    {manualVoiceIds[config.id] ? (
+                                                    {config.provider === "MOSI" || manualVoiceIds[config.id] ? (
                                                         <>
                                                             <Input
                                                                 type="text"
                                                                 value={config.defaultVoice}
                                                                 onChange={(e) => updateConfig(config.id, { defaultVoice: e.target.value })}
-                                                                placeholder={config.provider === "OpenAI" ? "alloy" : "male-qn-qingse 或克隆 Voice ID"}
+                                                                placeholder={config.provider === "OpenAI" ? "alloy" : config.provider === "MOSI" ? "从 MOSI 音色库复制 Voice ID" : "male-qn-qingse 或克隆 Voice ID"}
                                                                 className="flex-1"
                                                             />
-                                                            <button
-                                                                type="button"
-                                                                onClick={() => setManualVoiceIds(prev => ({ ...prev, [config.id]: false }))}
-                                                                className="ui-icon-btn"
-                                                                aria-label="返回音色下拉选择"
-                                                                title="返回音色下拉选择"
-                                                            >
-                                                                <List size={20} />
-                                                            </button>
+                                                            {config.provider !== "MOSI" && (
+                                                                <button
+                                                                    type="button"
+                                                                    onClick={() => setManualVoiceIds(prev => ({ ...prev, [config.id]: false }))}
+                                                                    className="ui-icon-btn"
+                                                                    aria-label="返回音色下拉选择"
+                                                                    title="返回音色下拉选择"
+                                                                >
+                                                                    <List size={20} />
+                                                                </button>
+                                                            )}
                                                         </>
                                                     ) : (
                                                         (() => {
@@ -899,11 +989,11 @@ export function VoiceSettings() {
                                                 <div className="flex gap-2 mt-0.5">
                                                     <button
                                                         onClick={() => fetchVoices(config)}
-                                                        disabled={isFetching[config.id]}
+                                                        disabled={isFetching[config.id] || config.provider === "MOSI"}
                                                         className="ui-btn ui-btn ui-btn-soft-action w-full"
                                                     >
                                                         <RefreshCw size={16} className={isFetching[config.id] ? "animate-spin" : ""} />
-                                                        {isFetching[config.id] ? "同步中..." : config.provider === "Minimax" ? "同步音色列表" : "显示默认音色"}
+                                                        {isFetching[config.id] ? "同步中..." : config.provider === "Minimax" ? "同步音色列表" : config.provider === "MOSI" ? "MOSI 音色列表暂未接入" : "显示默认音色"}
                                                     </button>
                                                     {config.provider === "Minimax" && (
                                                         <button
