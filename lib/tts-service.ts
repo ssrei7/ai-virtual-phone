@@ -211,8 +211,13 @@ async function synthesizeMosi(text: string, config: VoiceApiConfig): Promise<Blo
     }
 
     const blob = await response.blob();
-    const mimeType = response.headers.get("content-type") || "audio/mpeg";
-    return new Blob([await blob.arrayBuffer()], { type: mimeType.split(";")[0] || "audio/mpeg" });
+    if (blob.size <= 0) throw new Error("MOSI 返回了空音频");
+    // 某些网关会把音频二进制标成 application/octet-stream，浏览器的
+    // HTMLAudioElement 会因此报 MediaError("Load failed")。我们请求的是 mp3，
+    // 这里固定纠正 MIME，避免请求已扣费但试听无法解码。
+    const contentType = (response.headers.get("content-type") || "").split(";")[0].trim().toLowerCase();
+    const mimeType = contentType.startsWith("audio/") ? contentType : "audio/mpeg";
+    return new Blob([await blob.arrayBuffer()], { type: mimeType });
 }
 
 // ── iOS audio playback that coexists with speech recognition ──────────
