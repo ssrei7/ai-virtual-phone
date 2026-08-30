@@ -18,7 +18,7 @@ import rehypeRaw from "rehype-raw";
 import remarkGfm from "remark-gfm";
 import remarkBreaks from "remark-breaks";
 import { createPortal } from "react-dom";
-import { Blocks, Maximize2, ReceiptText } from "lucide-react";
+import { Blocks, Maximize2, ReceiptText, Volume2, Square, Download, Loader2 } from "lucide-react";
 import { retryChatGeneratedImage } from "@/lib/generated-image-retry";
 import { GeneratedImageErrorDialog } from "./generated-image-error-dialog";
 import { ScanPayCard } from "@/components/chat/scan-pay-card";
@@ -27,6 +27,10 @@ import { formatShoppingPaymentRequestHistory } from "@/lib/shopping-payment-requ
 import { toCustomAppIconId } from "@/lib/custom-app-types";
 import { ChatPluginSlot } from "@/components/chat/chat-plugin-slot";
 import { CHAT_PLUGIN_SLOTS_CHANGED_EVENT, getChatPluginRuntime } from "@/lib/chat-plugin-runtime";
+import { resolveVoiceConfig, synthesizeSpeech, playAudioBlobViaMediaElement } from "@/lib/tts-service";
+import { getChatTtsClip, saveChatTtsClip, touchChatTtsClip, type ChatTtsClip } from "@/lib/chat-tts-cache";
+
+let activeReadAloudAbort: (() => void) | null = null;
 
 interface MessageBubbleProps {
     msg: ChatMessage;
@@ -123,7 +127,12 @@ export const MessageBubble = memo(function MessageBubble({ msg, onUpdate, charNa
             if (msg.mediaType?.startsWith("plugin:")) {
                 return <PluginKindBubble msg={msg} kind={msg.mediaType.slice("plugin:".length)} />;
             }
-            const textBubble = <TextBubble content={displayContent ?? msg.content} onActionSelect={onActionSelect} defaultTranslationExpanded={defaultTranslationExpanded} />;
+            const textBubble = (
+                <>
+                    <TextBubble content={displayContent ?? msg.content} onActionSelect={onActionSelect} defaultTranslationExpanded={defaultTranslationExpanded} />
+                    <ChatMessageReadAloud msg={msg} characterId={characterId} />
+                </>
+            );
             return (
                 <>
                     {textBubble}
@@ -639,6 +648,118 @@ export const BilingualTextBlock = memo(function BilingualTextBlock({
         </div>
     );
 });
+
+function stripTextForReading(content: string): string {
+    return normalizeTextBubbleContent(content)
+        .replace(/```(?:html|[a-z0-9_-]+)?[\s\S]*?```/gi, "")
+        .replace(/<style[\s\S]*?<\/style>/gi, "")
+        .replace(/<script[\s\S]*?<\/script>/gi, "")
+        .replace(/<[^>]+>/g, "")
+        .replace(/!\[([^\]]*)\]\([^)]*\)/g, "$1")
+        .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1")
+        .replace(/[\*_~`>#]/g, "")
+        .replace(/\n{3,}/g, "\n\n")
+        .trim();
+}
+
+function ChatMessageReadAloud({ msg, characterId }: { msg: ChatMessage; characterId?: string }) {
+    const [status, setStatus] = useState<"idle" | "loading" | "playing">("idle");
+    const [cachedClip, setCachedClip] = useState<ChatTtsClip | null>(null);
+    const abortRef = useRef<(() => void) | null>(null);
+    const requestRef = useRef<Promise<Blob> | null>(null);
+    const text = useMemo(() => stripTextForReading(msg.content), [msg.content]);
+    const config = characterId ? resolveVoiceConfig(characterId) : null;
+    const cacheInput = config && text ? {
+        messageId: msg.id,
+        text,
+        configId: config.id,
+        provider: config.provider,
+        model: config.model || "",
+        voiceId: config.defaultVoice || "",
+        format: "mp3",
+    } : null;
+
+    useEffect(() => {
+        let active = true;
+        if (!cacheInput) { setCachedClip(null); return () => { active = false; }; }
+        getChatTtsClip(cacheInput).then(clip => { if (active) setCachedClip(clip); }).catch(() => {});
+        return () => { active = false; };
+    }, [cacheInput?.messageId, cacheInput?.text, cacheInput?.configId, cacheInput?.model, cacheInput?.voiceId]);
+
+    useEffect(() => () => { abortRef.current?.(); }, []);
+
+    if (msg.role !== "assistant" || !characterId || !text || !config || config.enableTTS === false) return null;
+
+    const getAudioBlob = async (): Promise<Blob> => {
+        if (cachedClip) {
+            void touchChatTtsClip(cachedClip);
+            return cachedClip.blob;
+        }
+        if (requestRef.current) return requestRef.current;
+        const request = synthesizeSpeech(text, config).then(async blob => {
+            if (!blob || blob.size <= 0) throw new Error("TTS 未返回有效音频");
+            const saved = await saveChatTtsClip({ ...cacheInput!, blob, sessionId: msg.sessionId });
+            if (saved) setCachedClip(saved);
+            return blob;
+        }).finally(() => { requestRef.current = null; });
+        requestRef.current = request;
+        return request;
+    };
+
+    const play = async () => {
+        if (status === "playing") {
+            const abort = abortRef.current;
+            abort?.();
+            abortRef.current = null;
+            if (activeReadAloudAbort === abort) activeReadAloudAbort = null;
+            setStatus("idle");
+            return;
+        }
+        activeReadAloudAbort?.();
+        activeReadAloudAbort = null;
+        setStatus("loading");
+        try {
+            const blob = await getAudioBlob();
+            const { promise, abort } = playAudioBlobViaMediaElement(blob);
+            activeReadAloudAbort?.();
+            activeReadAloudAbort = abort;
+            abortRef.current = abort;
+            setStatus("playing");
+            await promise;
+        } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            alert(`朗读失败: ${message}`);
+        } finally {
+            abortRef.current = null;
+            setStatus("idle");
+        }
+    };
+
+    const download = async () => {
+        try {
+            const blob = await getAudioBlob();
+            const url = URL.createObjectURL(blob);
+            const anchor = document.createElement("a");
+            anchor.href = url;
+            anchor.download = `chat-${msg.id}.mp3`;
+            anchor.click();
+            setTimeout(() => URL.revokeObjectURL(url), 1000);
+        } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            alert(`音频生成失败: ${message}`);
+        }
+    };
+
+    return (
+        <div className="flex items-center gap-2 mt-1 text-[var(--c-icon)]" onClick={e => e.stopPropagation()}>
+            <button type="button" className="inline-flex items-center gap-1 opacity-65 hover:opacity-100" onClick={play} disabled={status === "loading"} aria-label={status === "playing" ? "停止朗读" : "朗读消息"}>
+                {status === "loading" ? <Loader2 size={13} className="animate-spin" /> : status === "playing" ? <Square size={12} /> : <Volume2 size={14} />}
+                <span className="ts-11">{status === "loading" ? "生成中" : status === "playing" ? "停止" : cachedClip ? "播放" : "朗读"}</span>
+            </button>
+            {cachedClip && <button type="button" className="inline-flex items-center gap-1 opacity-65 hover:opacity-100" onClick={download} aria-label="下载朗读音频"><Download size={13} /><span className="ts-11">下载</span></button>}
+        </div>
+    );
+}
 
 function TextBubble({ content, onActionSelect, defaultTranslationExpanded = false }: { content: string; onActionSelect?: (text: string) => void; defaultTranslationExpanded?: boolean }) {
     return <BilingualTextBlock text={content} onActionSelect={onActionSelect} mode="markdown" defaultExpanded={defaultTranslationExpanded} />;

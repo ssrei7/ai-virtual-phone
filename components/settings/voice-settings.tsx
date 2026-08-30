@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef, useCallback, useContext } from "react";
-import { Plus, Play, Pause, AlertCircle, RefreshCw, FileEdit, Trash2, X, Check, Upload, List } from "lucide-react";
+import { Plus, Play, Pause, AlertCircle, RefreshCw, FileEdit, Trash2, X, Check, Upload, List, Loader2 } from "lucide-react";
 import { SettingsContext } from "../phone-settings-app";
 import type { VoiceApiConfig } from "@/lib/settings-types";
 import { loadVoiceConfigs, saveVoiceConfigs } from "@/lib/settings-storage";
@@ -9,6 +9,7 @@ import { synthesizeSpeech } from "@/lib/tts-service";
 import { ConfirmDialog } from "@/components/ui/modal";
 import { Toggle, Input } from "@/components/ui/form";
 import { Alert } from "@/components/ui/feedback";
+import { clearChatTtsCache, listChatTtsClips } from "@/lib/chat-tts-cache";
 
 const SUPPORTED_VOICE_PROVIDERS = new Set(["Minimax", "OpenAI", "MOSI"]);
 const MINIMAX_BASE_URL_OPTIONS = [
@@ -265,6 +266,8 @@ export function VoiceSettings() {
     const [isFetching, setIsFetching] = useState<Record<string, boolean>>({});
     const [fetchedVoices, setFetchedVoices] = useState<Record<string, VoiceOption[]>>({});
     const [fetchError, setFetchError] = useState<Record<string, string>>({});
+    const [ttsCacheStats, setTtsCacheStats] = useState({ count: 0, bytes: 0 });
+    const [isClearingTtsCache, setIsClearingTtsCache] = useState(false);
 
     // Load from localStorage on mount
     useEffect(() => {
@@ -303,6 +306,15 @@ export function VoiceSettings() {
         setIsNewConfig(true);
         setEditingId(newConfig.id);
     }, [configs, persist]);
+
+    useEffect(() => {
+        let active = true;
+        listChatTtsClips().then(clips => {
+            if (!active) return;
+            setTtsCacheStats({ count: clips.length, bytes: clips.reduce((sum, clip) => sum + clip.size, 0) });
+        }).catch(() => {});
+        return () => { active = false; };
+    }, []);
 
     useEffect(() => {
         setSubpageRightAction("voice",
@@ -594,10 +606,41 @@ export function VoiceSettings() {
 
     if (!isLoaded) return null;
 
+    const ttsCacheSize = ttsCacheStats.bytes < 1024 * 1024
+        ? `${(ttsCacheStats.bytes / 1024).toFixed(1)} KB`
+        : `${(ttsCacheStats.bytes / (1024 * 1024)).toFixed(1)} MB`;
+
+    const clearTtsCache = async () => {
+        if (ttsCacheStats.count <= 0 || isClearingTtsCache) return;
+        if (!window.confirm(`将清除 ${ttsCacheStats.count} 条朗读音频缓存（约 ${ttsCacheSize}）。聊天记录不会被删除；以后再次朗读可能重新扣除 TTS 积分。确定继续吗？`)) return;
+        setIsClearingTtsCache(true);
+        try {
+            await clearChatTtsCache();
+            setTtsCacheStats({ count: 0, bytes: 0 });
+        } finally {
+            setIsClearingTtsCache(false);
+        }
+    };
+
     return (
         <div className="flex flex-col gap-6">
             <div className="flex items-center">
                 <h2 className="m-0 mx-2 ts-28 font-bold italic leading-none text-black">Voice API</h2>
+            </div>
+            <div className="ui-config-card flex items-center justify-between gap-3" style={{ padding: "14px" }}>
+                <div className="min-w-0">
+                    <div className="menu-label font-semibold">聊天朗读缓存</div>
+                    <div className="menu-desc">已缓存 {ttsCacheStats.count} 条 · 占用 {ttsCacheSize}。重复播放不会再次调用 TTS。</div>
+                </div>
+                <button
+                    type="button"
+                    className="ui-btn ui-btn-soft-action shrink-0"
+                    onClick={clearTtsCache}
+                    disabled={ttsCacheStats.count === 0 || isClearingTtsCache}
+                >
+                    {isClearingTtsCache ? <Loader2 size={15} className="animate-spin" /> : <Trash2 size={15} />}
+                    清空缓存
+                </button>
             </div>
 
             {configs.length === 0 ? (
