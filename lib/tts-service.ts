@@ -209,7 +209,44 @@ async function synthesizeMosi(text: string, config: VoiceApiConfig): Promise<Blo
         throw new Error(`MOSI TTS 请求失败 (${response.status}): ${detail.slice(0, 500)}`);
     }
 
-    const blob = await response.blob();
+    const created = await response.json().catch(() => null) as Record<string, unknown> | null;
+    const taskId = typeof created?.task_id === "string" ? created.task_id : typeof created?.id === "string" ? created.id : "";
+    if (!taskId) throw new Error("MOSI 未返回 task_id");
+
+    const deadline = Date.now() + TTS_TIMEOUT_MS;
+    let task: Record<string, unknown> = created;
+    while (true) {
+        const status = String(task.status || "").toUpperCase();
+        if (status === "SUCCESS") break;
+        if (["FAILED", "CANCELED", "CANCELLED"].includes(status)) {
+            const error = task.error && typeof task.error === "object" ? JSON.stringify(task.error) : String(task.error || "未知错误");
+            throw new Error(`MOSI 语音任务失败: ${error.slice(0, 500)}`);
+        }
+        if (Date.now() >= deadline) throw new Error("MOSI 语音任务超时");
+        const retryAfter = Number(task.retry_after);
+        const waitMs = Number.isFinite(retryAfter) ? Math.min(10_000, Math.max(1_000, retryAfter * 1000)) : 3_000;
+        await new Promise(resolve => setTimeout(resolve, Math.min(waitMs, Math.max(0, deadline - Date.now()))));
+        const statusResponse = await fetchWithTimeout("/api/voice/mosi", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ action: "status", apiKey: config.apiKey, baseUrl, taskId }),
+        });
+        const statusData = await statusResponse.json().catch(() => ({})) as Record<string, unknown>;
+        if (!statusResponse.ok) throw new Error(`MOSI 任务查询失败: ${String(statusData.message || statusData.error || statusResponse.status)}`);
+        task = statusData;
+    }
+
+    const audioResponse = await fetchWithTimeout("/api/voice/mosi", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "audio", apiKey: config.apiKey, baseUrl, taskId }),
+    });
+    if (!audioResponse.ok) {
+        const detail = await audioResponse.text().catch(() => "");
+        throw new Error(`MOSI 音频下载失败 (${audioResponse.status}): ${detail.slice(0, 500)}`);
+    }
+
+    const blob = await audioResponse.blob();
     if (blob.size <= 0) throw new Error("MOSI 返回了空音频");
     // 某些网关会把音频二进制标成 application/octet-stream，浏览器的
     // HTMLAudioElement 会因此报 MediaError("Load failed")。我们请求的是 mp3，
