@@ -218,13 +218,40 @@ ssrei7/ai-virtual-phone
 
 Netlify 应继续关联这个 fork 的部署分支。若改为关联官方仓库，官方尚未合并这些功能时，MOSI 和聊天朗读将不会出现在部署版本中。
 
+## 按日期记录个人提交
+
+以后所有个人功能改动都按提交日期追加到这里，至少记录：
+
+- 日期；
+- Git commit 标题和短 SHA（提交完成后补充）；
+- 改动目的；
+- 涉及文件；
+- 测试设备与结果；
+- 已知限制；
+- 是否已向官方提交 PR、是否已合并。
+
+### 2026-08-30
+
+- `feat: add MOSI voice provider`
+- `fix: improve MOSI audio playback compatibility`
+- `fix: proxy MOSI TTS requests to avoid browser CORS preflight`
+- `fix: use MOSI async speech tasks to avoid CORS and function timeout`
+- `fix: make voice preview compatible with iPhone Safari`
+- `feat: add chat message read aloud with caching and download`
+- `docs: document personal MOSI and chat read-aloud patches`
+
+摘要：增加 MOSI 语音 provider、服务端异步任务代理、iPhone Safari 试听兼容、聊天消息朗读、IndexedDB 音频缓存、音频下载和缓存清理。个人测试设备为 Windows Chrome 与 iPhone Safari；其他设备未测试。以上功能目前保留在个人 fork，尚未确认被官方仓库合并。
+
 ## 后续维护
 
 每次调整这些个人功能后，请同步更新本文件：
 
 - 新增或删除的文件；
-- 提交标题；
+- 提交日期、标题和短 SHA；
+- 改动目的；
 - 支持的 MOSI 模型或接口；
 - 测试设备与结果；
 - 已知限制；
 - 官方仓库是否已经合并其中部分功能。
+
+工坊后续进行任何个人仓库提交时，会按实际提交日期把改动追加到本节；如果一次任务包含多个独立 commit，会逐条记录，不把不同功能混成一条。
