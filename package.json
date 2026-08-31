@@ -9,6 +9,7 @@
     "start": "node scripts/local-next-server.mjs --prod",
     "lint": "next lint",
     "check:sdk": "node scripts/check-custom-app-sdk-consistency.mjs",
+    "test:image-reference": "node scripts/test-image-generation-reference.mjs",
     "check:weixin": "node scripts/check-weixin-prompt-equivalence.mjs",
     "check:push": "node scripts/check-personal-push-dist.mjs",
     "weixin:assistant": "node tools/weixin-local-assistant/assistant.mjs",
